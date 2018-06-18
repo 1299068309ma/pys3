@@ -24,26 +24,29 @@ STATUS_CODE  = {
 
 class ServerHandler(socketserver.BaseRequestHandler):
     def handle(self):
-        while 1:
+        try:
+            while 1:
 
-            data=self.request.recv(1024).strip()
-            data=json.loads(data.decode('utf-8'))
-            '''
-            {'action':'auth',
-             'username':'ma',
-             'pwd':'123',
-            }
-            
-            '''
-
-            if data.get('action'):
-                if hasattr(self,data.get('action')):
-                    func=getattr(self,data.get('action'))
-                    func(**data)
+                data=self.request.recv(1024).strip()
+                data=json.loads(data.decode('utf-8'))
+                '''
+                {'action':'auth',
+                 'username':'ma',
+                 'pwd':'123',
+                }
+                
+                '''
+                print(data)
+                if data.get('action'):
+                    if hasattr(self,data.get('action')):
+                        func=getattr(self,data.get('action'))
+                        func(**data)
+                    else:
+                        print('无效')
                 else:
-                    print('无效')
-            else:
-                print('无效命令')
+                    print('无效命令')
+        except Exception as e:
+            print(e)
 
 
     def send_response(self,state_code):
@@ -53,16 +56,16 @@ class ServerHandler(socketserver.BaseRequestHandler):
 
 
     def auth(self,**data):
-        # print(data)
+        print('auth data',data)
         username=data['username']
         password=data['password']
 
         user=self.authenticate(username,password)
         if user:
             self.send_response(254)
-
         else:
             self.send_response(253)
+
 
     def authenticate(self,user,pwd):
 
@@ -77,7 +80,7 @@ class ServerHandler(socketserver.BaseRequestHandler):
                 return user
 
     def put(self,**data):
-        print('data',data)
+        print('put data',data)
         file_name=data.get('file_name')
         file_size=data.get('file_size')
         target_path=data.get('target_path')
@@ -92,22 +95,78 @@ class ServerHandler(socketserver.BaseRequestHandler):
         if os.path.exists(abs_path):
             has_file_size=os.stat(abs_path).st_size
             if has_file_size<file_size:
-                #断点续传
-                pass
+                #文件不完整
+                self.request.sendall('800'.encode('utf-8'))
+
+                choice=self.request.recv(1024).decode('utf-8')
+                if choice=='Y':
+                    self.request.sendall(str(has_file_size).encode('utf-8'))
+                    f = open(abs_path, 'ab')
+                    has_received=has_file_size
+                else:
+                    f = open(abs_path, 'wb')
+
             else:
                 #文件完全存在
-                self.request.sendall('802'.encode('utf-8'))
-
-            f = open(abs_path, 'ab')
+                self.request.sendall('801'.encode('utf-8'))
+                return
+                # f = open(abs_path, 'ab')
         else:
+            # 文件不存在
             self.request.sendall('802'.encode('utf-8'))
-
             f=open(abs_path,'wb')
 
         while has_received<file_size:
-            data=self.request.recv(1024) #有多少收多少，最多1024字节
+            try:
+                data=self.request.recv(1024) #有多少收多少，最多1024字节
+            except Exception as e:
+                print('put error',e)
+                break
             f.write(data)
             has_received+=len(data)
+
+
         f.close()
 
+    def ls(self,**data):
 
+        file_list=os.listdir(self.mainPath)
+        print('ls mainpath:',self.mainPath)
+        file_str = '\n'.join(file_list)
+        if not file_list:
+            file_str='<empty dir>'
+        self.request.sendall(file_str.encode('utf-8'))
+
+    def cd(self,**data):
+        # print('cd data type:',type(data))
+        dirname=data.get('dirname')
+        path = os.path.join(self.mainPath, dirname)
+        if dirname=='..':
+            self.mainPath=os.path.dirname(self.mainPath)
+            print('cd .. mainpath:',self.mainPath)
+            self.request.sendall(self.mainPath.encode('utf-8'))
+        else:
+            if dirname in os.listdir(self.mainPath):
+                if os.path.isdir(path):
+                    self.mainPath=os.path.join(self.mainPath,dirname)
+                    self.request.sendall(self.mainPath.encode('utf-8'))
+                else:
+                    self.request.sendall(('%s不是目录' % dirname).encode('utf-8'))
+            else:
+                self.request.sendall(('%s目录不存在'%dirname).encode('utf-8'))
+
+
+    def mkdir(self,**data):
+        dirname = data.get('dirname')
+        path=os.path.join(self.mainPath,dirname)
+
+        # 判断是否存在
+        if not os.path.exists(path):
+            #判断是否多重目录
+            if '/' in dirname:
+                os.makedirs(path)
+            else:
+                os.mkdir(path)
+            self.request.sendall(('%s 目录创建成功'%dirname).encode('utf-8'))
+        else:
+            self.request.sendall(('%s 目录已经存在'%dirname).encode('utf-8'))

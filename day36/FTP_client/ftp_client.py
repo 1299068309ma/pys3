@@ -7,7 +7,7 @@
 import optparse,socket
 import configparser
 import json
-import os
+import os,sys
 
 
 STATUS_CODE  = {
@@ -47,6 +47,8 @@ class ClientHandler():
 
         self.mainPath=os.path.dirname(os.path.abspath(__file__))
 
+        self.last = 0
+
 
     def verify_args(self):
         server=self.options.server
@@ -66,13 +68,19 @@ class ClientHandler():
         self.sock.connect((self.options.server,int(self.options.port)))
 
     def interactive(self):
+        print('begin to interative...')
         if self.authenticate():
-            print('begin to interative...')
-            cmd_info=input('[%s]'%self.user).strip()
-            cmd_list=cmd_info.split()
-            if hasattr(self,cmd_list[0]):
-                func=getattr(self,cmd_list[0])
-                self.func(*cmd_list)
+            while 1:
+                cmd_info=input('[%s]'%self.current_dir).strip() #例如 put 12.png images
+                cmd_list=cmd_info.split()
+                if (cmd_list[0]=='q') | (cmd_list[0]=='quit'):
+                    exit()
+                if hasattr(self,cmd_list[0]):
+                    func=getattr(self,cmd_list[0])
+                    func(*cmd_list)
+                else:
+                    print('没有%s命令'%cmd_list[0])
+
 
     def put(self,*cmd_list):
         #put 12.png images
@@ -91,7 +99,35 @@ class ClientHandler():
         self.sock.send(json.dumps(data).encode('utf-8'))
 
         is_exist=self.sock.recv(1024).decode('utf-8')
+        has_sent=0
 
+        if is_exist=='800':
+            #文件不完整
+            choice = input('文件存在，但不完整，是否续传[Y/N]').strip()
+            if choice.upper() == 'Y':
+                self.sock.sendall('Y'.encode('utf-8'))
+                has_sent = int(self.sock.recv(1024).decode('utf-8'))
+            else:
+                self.sock.sendall('N'.encode('utf-8'))
+        elif is_exist=='801':
+            # 文件完全存在
+            print('%s 已经存在。'%file_name)
+            return
+
+        f=open(local_path,'rb')
+        f.seek(has_sent)
+        while has_sent<file_size:
+            data=f.read(1024)
+            self.sock.sendall(data)
+            has_sent+=len(data)
+            self.show_progress(has_sent,file_size)
+        f.close()
+        print('put %s success!'%file_name)
+
+    def show_progress(self,has,total):
+        rate=float(has)/float(total)
+        rate_num=int(rate*100)
+        sys.stdout.write('%s%% %s\r'%(rate_num,'#'*rate_num))
 
 
     def authenticate(self):
@@ -119,10 +155,51 @@ class ClientHandler():
 
         if response["status_code"]==254:
             self.user=user
+            self.current_dir=user
             print(STATUS_CODE[254])
             return True
         else:
             print(STATUS_CODE[response['status_code']])
+
+    def ls(self,*cmd_list):
+        data={
+            'action':'ls',
+        }
+        self.sock.sendall(json.dumps(data).encode('utf-8'))
+
+        data=self.sock.recv(1024).decode('utf-8')
+        print(data)
+
+    def cd(self,*cmd_list):
+        #cm images
+        data={
+            'action':'cd',
+            'dirname':cmd_list[1]
+        }
+
+        self.sock.sendall(json.dumps(data).encode('utf-8'))
+
+        data = self.sock.recv(1024).decode('utf-8')
+        # print(os.path.basename(data))
+        if '目录' in data:
+            print(data)
+        elif '不是目录' in data:
+            print(data)
+        else:
+            self.current_dir=os.path.basename(data)
+
+    def mkdir(self,*cmd_list):
+
+        data = {
+            'action': 'mkdir',
+            'dirname': cmd_list[1]
+        }
+
+        self.sock.sendall(json.dumps(data).encode('utf-8'))
+
+        data = self.sock.recv(1024).decode('utf-8')
+
+        print(data)
 
 ch=ClientHandler()
 
